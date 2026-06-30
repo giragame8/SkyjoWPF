@@ -6,15 +6,20 @@ namespace SkyjoWPF.Core
 {
     public class MoteurJeu
     {
+        public int Seed { get; private set; }
         public List<Carte> Pioche { get; private set; }
         public Stack<Carte> Defausse { get; private set; }
-        public Carte[] GrilleJoueur { get; private set; }
+        public Carte[] GrilleP1 { get; private set; }
+        public Carte[] GrilleP2 { get; private set; }
 
-        public MoteurJeu()
+        public MoteurJeu(int seed = -1)
         {
+            Seed = seed == -1 ? new Random().Next() : seed;
+
             Pioche = new List<Carte>();
             Defausse = new Stack<Carte>();
-            GrilleJoueur = new Carte[12];
+            GrilleP1 = new Carte[12];
+            GrilleP2 = new Carte[12];
             InitialiserPartie();
         }
 
@@ -27,10 +32,8 @@ namespace SkyjoWPF.Core
 
             MelangerPioche();
 
-            for (int i = 0; i < 12; i++)
-            {
-                GrilleJoueur[i] = TirerCarte();
-            }
+            for (int i = 0; i < 12; i++) GrilleP1[i] = TirerCarte();
+            for (int i = 0; i < 12; i++) GrilleP2[i] = TirerCarte();
 
             Carte premiereDefausse = TirerCarte();
             premiereDefausse.EstVisible = true;
@@ -45,7 +48,7 @@ namespace SkyjoWPF.Core
 
         private void MelangerPioche()
         {
-            Random rng = new Random();
+            Random rng = new Random(Seed);
             int n = Pioche.Count;
             while (n > 1)
             {

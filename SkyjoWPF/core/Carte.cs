@@ -18,6 +18,8 @@ namespace SkyjoWPF.Core
                 _estVisible = value;
                 OnPropertyChanged();
                 OnPropertyChanged(nameof(Affichage));
+                OnPropertyChanged(nameof(CouleurFond));
+                OnPropertyChanged(nameof(CouleurTexte));
             }
         }
 
@@ -29,10 +31,34 @@ namespace SkyjoWPF.Core
                 _estVide = value;
                 OnPropertyChanged();
                 OnPropertyChanged(nameof(Affichage));
+                OnPropertyChanged(nameof(CouleurFond));
+                OnPropertyChanged(nameof(CouleurTexte));
             }
         }
 
         public string Affichage => EstVide ? "" : (EstVisible ? Valeur.ToString() : "?");
+
+        // Assigne les couleurs officielles du jeu Skyjo
+        public string CouleurFond
+        {
+            get
+            {
+                if (EstVide) return "Transparent";
+                if (!EstVisible) return "#34495e"; // Couleur du dos de la carte (Bleu/Gris foncé)
+
+                if (Valeur == -2) return "#9b59b6"; // Violet
+                if (Valeur == -1) return "#2980b9"; // Bleu foncé
+                if (Valeur == 0) return "#3498db";  // Bleu clair
+                if (Valeur >= 1 && Valeur <= 4) return "#2ecc71";  // Vert
+                if (Valeur >= 5 && Valeur <= 8) return "#f1c40f";  // Jaune
+                if (Valeur >= 9 && Valeur <= 12) return "#e74c3c"; // Rouge
+
+                return "#ffffff";
+            }
+        }
+
+        // Le texte est blanc sur le dos de la carte, et foncé quand la carte est visible pour mieux lire
+        public string CouleurTexte => EstVide ? "Transparent" : (EstVisible ? "#2c3e50" : "#ffffff");
 
         public Carte(int valeur)
         {

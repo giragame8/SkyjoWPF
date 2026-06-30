@@ -12,6 +12,7 @@
             <RowDefinition Height="Auto"/>
         </Grid.RowDefinitions>
 
+        <!-- GRILLE ADVERSAIRE -->
         <TextBlock x:Name="TxtNomAdversaire" Text="ADVERSAIRE" Foreground="#e74c3c" FontSize="16" FontWeight="Bold" HorizontalAlignment="Center"/>
         <ItemsControl x:Name="ItemsGrilleIA" Grid.Row="1" HorizontalAlignment="Center" VerticalAlignment="Center">
             <ItemsControl.ItemsPanel>
@@ -21,11 +22,13 @@
             </ItemsControl.ItemsPanel>
             <ItemsControl.ItemTemplate>
                 <DataTemplate>
-                    <Button Content="{Binding Affichage}" Width="60" Height="90" Margin="5" FontSize="20" FontWeight="Bold" IsHitTestVisible="False"/>
+                    <!-- Ajout du Background et Foreground dynamiques -->
+                    <Button Content="{Binding Affichage}" Background="{Binding CouleurFond}" Foreground="{Binding CouleurTexte}" Width="60" Height="90" Margin="5" FontSize="20" FontWeight="Bold" IsHitTestVisible="False"/>
                 </DataTemplate>
             </ItemsControl.ItemTemplate>
         </ItemsControl>
 
+        <!-- CENTRE : PIOCHE ET DEFAUSSE -->
         <StackPanel Grid.Row="2" Orientation="Horizontal" HorizontalAlignment="Center" Margin="10">
             <StackPanel Margin="0,0,20,0">
                 <TextBlock Text="Pioche" Foreground="White" HorizontalAlignment="Center"/>
@@ -33,10 +36,11 @@
             </StackPanel>
             <StackPanel>
                 <TextBlock Text="Défausse" Foreground="White" HorizontalAlignment="Center"/>
-                <Button x:Name="BtnDefausse" Width="80" Height="120" FontSize="24" FontWeight="Bold" Click="BtnDefausse_Click"/>
+                <Button x:Name="BtnDefausse" Width="80" Height="120" FontSize="24" FontWeight="Bold" Click="BtnDefausse_Click" Background="#ecf0f1" Foreground="#2c3e50"/>
             </StackPanel>
         </StackPanel>
 
+        <!-- GRILLE JOUEUR -->
         <ItemsControl x:Name="ItemsGrille" Grid.Row="3" HorizontalAlignment="Center" VerticalAlignment="Center">
             <ItemsControl.ItemsPanel>
                 <ItemsPanelTemplate>
@@ -45,12 +49,14 @@
             </ItemsControl.ItemsPanel>
             <ItemsControl.ItemTemplate>
                 <DataTemplate>
-                    <Button Content="{Binding Affichage}" Width="60" Height="90" Margin="5" FontSize="20" FontWeight="Bold" Click="Carte_Click"/>
+                    <!-- Ajout du Background et Foreground dynamiques -->
+                    <Button Content="{Binding Affichage}" Background="{Binding CouleurFond}" Foreground="{Binding CouleurTexte}" Width="60" Height="90" Margin="5" FontSize="20" FontWeight="Bold" Click="Carte_Click"/>
                 </DataTemplate>
             </ItemsControl.ItemTemplate>
         </ItemsControl>
         <TextBlock x:Name="TxtNomJoueur" Grid.Row="4" Text="VOUS (P1)" Foreground="#2ecc71" FontSize="16" FontWeight="Bold" HorizontalAlignment="Center"/>
 
+        <!-- LE CANVAS POUR L'ANIMATION DE LA SOURIS -->
         <Canvas x:Name="OverlayCanvas" Grid.RowSpan="5" IsHitTestVisible="False" Panel.ZIndex="100">
             <TextBlock x:Name="CurseurIA" Text="🖐️" FontSize="40" Visibility="Hidden" Canvas.Left="-50" Canvas.Top="-50">
                 <TextBlock.RenderTransform>
@@ -59,6 +65,7 @@
             </TextBlock>
         </Canvas>
 
+        <!-- LE MENU PRINCIPAL -->
         <Border x:Name="MenuPanel" Grid.RowSpan="5" Background="#2c3e50" Panel.ZIndex="200">
             <StackPanel HorizontalAlignment="Center" VerticalAlignment="Center">
                 <TextBlock Text="SKYJO LAN EDITION" FontSize="36" FontWeight="Bold" Foreground="White" Margin="0,0,0,30" HorizontalAlignment="Center"/>
@@ -78,6 +85,5 @@
                 <TextBlock x:Name="TxtStatutMenu" Foreground="Yellow" FontSize="14" Margin="0,10,0,0" HorizontalAlignment="Center"/>
             </StackPanel>
         </Border>
-
     </Grid>
 </Window>

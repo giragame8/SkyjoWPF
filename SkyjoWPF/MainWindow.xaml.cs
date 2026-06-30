@@ -1,5 +1,9 @@
 ﻿using System;
+using System.IO;
 using System.Linq;
+using System.Net;
+using System.Net.Sockets;
+using System.Text;
 using System.Threading.Tasks;
 using System.Windows;
 using System.Windows.Controls;
@@ -7,16 +11,10 @@ using System.Windows.Media;
 using System.Windows.Media.Animation;
 using SkyjoWPF.Core;
 
-// Bibliothèques réseau nécessaires
-using System.Net;
-using System.Net.Sockets;
-using System.Text;
-
 namespace SkyjoWPF
 {
     public enum ModeJeu { Solo, Hote, Client }
 
-    // Petite classe pour stocker les infos des parties trouvées sur le réseau
     public class ServeurInfo
     {
         public string IP { get; set; }
@@ -28,23 +26,26 @@ namespace SkyjoWPF
     {
         private MoteurJeu jeu;
         private Carte carteEnMain;
+        private Carte carteEnMainAdversaire;
         private bool tourDuJoueur = true;
 
-        private Carte[] GrilleP2 = new Carte[12];
+        private Carte[] MaGrille;
+        private Carte[] GrilleAdversaire;
         private ModeJeu modeActuel = ModeJeu.Solo;
 
-        // Variables réseau
         private bool isHostingBroadcast = false;
-        private const int PORT_UDP_SCAN = 5556; // Le port utilisé pour se crier dessus sur le réseau
+        private const int PORT_UDP_SCAN = 5556;
+
+        private TcpListener serveurTcp;
+        private TcpClient clientTcp;
+        private StreamReader reseauReader;
+        private StreamWriter reseauWriter;
+        private const int PORT_TCP_JEU = 5557;
 
         public MainWindow()
         {
             InitializeComponent();
         }
-
-        // ==========================================
-        // GESTION DU MENU ET DU SCANNAGE RÉSEAU
-        // ==========================================
 
         private void BtnSolo_Click(object sender, RoutedEventArgs e)
         {
@@ -53,47 +54,95 @@ namespace SkyjoWPF
             LancerPartieLocale();
         }
 
-        private void BtnHeberger_Click(object sender, RoutedEventArgs e)
+        private async void BtnHeberger_Click(object sender, RoutedEventArgs e)
         {
             modeActuel = ModeJeu.Hote;
-            TxtNomAdversaire.Text = "JOUEUR 2 (Attente...)";
+            TxtNomAdversaire.Text = "JOUEUR 2";
             TxtStatutMenu.Text = "Hébergement en cours... En attente d'un joueur.";
 
-            // 1. On lance le cri sur le réseau
             isHostingBroadcast = true;
             _ = BroadcasterPresence();
 
-            // 2. ICI PLUS TARD : On ouvrira le vrai serveur TCP (comme dans votre Python) pour que le client se connecte.
+            try
+            {
+                serveurTcp = new TcpListener(IPAddress.Any, PORT_TCP_JEU);
+                serveurTcp.Start();
+                clientTcp = await serveurTcp.AcceptTcpClientAsync();
+                isHostingBroadcast = false;
 
-            // Pour l'instant, on cache le menu pour voir le plateau vide
-            MenuPanel.Visibility = Visibility.Collapsed;
+                InitialiserConnexionReseau();
+                MessageBox.Show("Un joueur a rejoint votre partie !");
+
+                LancerPartieLocale();
+            }
+            catch (Exception ex)
+            {
+                MessageBox.Show("Erreur d'hébergement. Le pare-feu bloque peut-être le port 5557 ?\n" + ex.Message);
+            }
         }
 
-        private void BtnScanner_Click(object sender, RoutedEventArgs e)
+        private async void BtnScanner_Click(object sender, RoutedEventArgs e)
         {
             TxtStatutMenu.Text = "Recherche de parties en cours...";
             ListServeurs.Items.Clear();
-            BtnScanner_Click_Logic();
+
+            using (UdpClient udp = new UdpClient())
+            {
+                udp.Client.SetSocketOption(SocketOptionLevel.Socket, SocketOptionName.ReuseAddress, true);
+                udp.Client.Bind(new IPEndPoint(IPAddress.Any, PORT_UDP_SCAN));
+
+                var receiveTask = udp.ReceiveAsync();
+                var delayTask = Task.Delay(4000);
+
+                while (true)
+                {
+                    var completedTask = await Task.WhenAny(receiveTask, delayTask);
+                    if (completedTask == delayTask) break;
+
+                    var result = receiveTask.Result;
+                    string msg = Encoding.UTF8.GetString(result.Buffer);
+
+                    if (msg.StartsWith("SKYJO|"))
+                    {
+                        string nomDuPC = msg.Split('|')[1];
+                        string ip = result.RemoteEndPoint.Address.ToString();
+
+                        bool dejaPresent = false;
+                        foreach (ServeurInfo s in ListServeurs.Items) { if (s.IP == ip) dejaPresent = true; }
+
+                        if (!dejaPresent) ListServeurs.Items.Add(new ServeurInfo { IP = ip, NomDuPC = nomDuPC });
+                    }
+                    receiveTask = udp.ReceiveAsync();
+                }
+            }
+            TxtStatutMenu.Text = "Scan terminé.";
         }
 
-        private void BtnRejoindre_Click(object sender, RoutedEventArgs e)
+        private async void BtnRejoindre_Click(object sender, RoutedEventArgs e)
         {
             if (ListServeurs.SelectedItem is ServeurInfo serveurChoisi)
             {
                 modeActuel = ModeJeu.Client;
                 TxtNomAdversaire.Text = $"HÔTE ({serveurChoisi.NomDuPC})";
-                MenuPanel.Visibility = Visibility.Collapsed;
+                TxtStatutMenu.Text = "Connexion en cours...";
 
-                MessageBox.Show($"Bientôt : Connexion à l'IP {serveurChoisi.IP} en TCP !");
-                // ICI PLUS TARD : Connexion TCP au serveur
+                try
+                {
+                    clientTcp = new TcpClient();
+                    await clientTcp.ConnectAsync(serveurChoisi.IP, PORT_TCP_JEU);
+                    InitialiserConnexionReseau();
+                    MenuPanel.Visibility = Visibility.Collapsed;
+                    MessageBox.Show("Connecté ! En attente du plateau de l'hôte...");
+                }
+                catch (Exception ex)
+                {
+                    MessageBox.Show("Impossible de rejoindre la partie : " + ex.Message);
+                    TxtStatutMenu.Text = "Échec de la connexion.";
+                }
             }
-            else
-            {
-                MessageBox.Show("Veuillez sélectionner une partie dans la liste !");
-            }
+            else MessageBox.Show("Veuillez sélectionner une partie dans la liste !");
         }
 
-        // --- Le code du Scanner (Le Cri) ---
         private async Task BroadcasterPresence()
         {
             using (UdpClient udp = new UdpClient())
@@ -105,76 +154,171 @@ namespace SkyjoWPF
 
                 while (isHostingBroadcast)
                 {
-                    // On envoie le message à tout le réseau
                     await udp.SendAsync(bytes, bytes.Length, endPoint);
-                    await Task.Delay(2000); // Toutes les 2 secondes
+                    await Task.Delay(2000);
                 }
             }
         }
 
-        // --- Le code du Scanner (L'Écoute) ---
-        private async void BtnScanner_Click_Logic()
+        private void InitialiserConnexionReseau()
         {
-            using (UdpClient udp = new UdpClient())
-            {
-                // On écoute sur le port 5556
-                udp.Client.SetSocketOption(SocketOptionLevel.Socket, SocketOptionName.ReuseAddress, true);
-                udp.Client.Bind(new IPEndPoint(IPAddress.Any, PORT_UDP_SCAN));
-
-                // On écoute pendant maximum 4 secondes pour ne pas bloquer l'application indéfiniment
-                var receiveTask = udp.ReceiveAsync();
-                var delayTask = Task.Delay(4000);
-
-                while (true)
-                {
-                    var completedTask = await Task.WhenAny(receiveTask, delayTask);
-                    if (completedTask == delayTask)
-                    {
-                        break; // Temps écoulé
-                    }
-
-                    var result = receiveTask.Result;
-                    string msg = Encoding.UTF8.GetString(result.Buffer);
-
-                    if (msg.StartsWith("SKYJO|"))
-                    {
-                        string nomDuPC = msg.Split('|')[1];
-                        string ip = result.RemoteEndPoint.Address.ToString();
-
-                        // On vérifie si on l'a pas déjà ajouté
-                        bool dejaPresent = false;
-                        foreach (ServeurInfo s in ListServeurs.Items) { if (s.IP == ip) dejaPresent = true; }
-
-                        if (!dejaPresent)
-                        {
-                            ListServeurs.Items.Add(new ServeurInfo { IP = ip, NomDuPC = nomDuPC });
-                        }
-                    }
-
-                    // On relance l'écoute pour les autres
-                    receiveTask = udp.ReceiveAsync();
-                }
-            }
-            TxtStatutMenu.Text = "Scan terminé.";
+            var stream = clientTcp.GetStream();
+            reseauReader = new StreamReader(stream, Encoding.UTF8);
+            reseauWriter = new StreamWriter(stream, Encoding.UTF8) { AutoFlush = true };
+            _ = EcouterReseau();
         }
 
+        private async Task EcouterReseau()
+        {
+            try
+            {
+                while (clientTcp != null && clientTcp.Connected)
+                {
+                    string message = await reseauReader.ReadLineAsync();
+                    if (message != null)
+                    {
+                        await Dispatcher.InvokeAsync(async () => await TraiterMessageReseau(message));
+                    }
+                }
+            }
+            catch (Exception)
+            {
+                Dispatcher.Invoke(() => MessageBox.Show("Connexion perdue avec l'adversaire."));
+            }
+        }
 
-        // ==========================================
-        // LOGIQUE DU JEU (Reste identique à avant)
-        // ==========================================
+        private void EnvoyerMessageReseau(string message)
+        {
+            if (clientTcp != null && clientTcp.Connected)
+            {
+                reseauWriter.WriteLine(message);
+            }
+        }
 
-        private void LancerPartieLocale()
+        private async Task TraiterMessageReseau(string message)
+        {
+            string[] parts = message.Split('|');
+            string cmd = parts[0];
+
+            if (cmd == "SYNC_INIT")
+            {
+                int seed = int.Parse(parts[1]);
+                LancerPartieLocale(seed);
+            }
+            else if (cmd == "ACTION")
+            {
+                string typeAction = parts[1];
+                if (typeAction == "PIOCHE")
+                {
+                    await DeplacerCurseurVers(BtnPioche);
+                    carteEnMainAdversaire = jeu.TirerCarte();
+                    carteEnMainAdversaire.EstVisible = true;
+                }
+                else if (typeAction == "PREND_DEFAUSSE")
+                {
+                    await DeplacerCurseurVers(BtnDefausse);
+                    carteEnMainAdversaire = jeu.Defausse.Pop();
+                    MettreAJourDefausse();
+                }
+                else if (typeAction == "REMPLACER")
+                {
+                    int index = int.Parse(parts[2]);
+                    var conteneurBouton = ItemsGrilleIA.ItemContainerGenerator.ContainerFromIndex(index) as FrameworkElement;
+                    var boutonCible = GetVisualChild<Button>(conteneurBouton);
+
+                    if (boutonCible != null) await DeplacerCurseurVers(boutonCible);
+                    await Task.Delay(300);
+
+                    Carte ancienne = GrilleAdversaire[index];
+                    ancienne.EstVisible = true;
+                    jeu.Defausse.Push(ancienne);
+                    GrilleAdversaire[index] = carteEnMainAdversaire;
+                    carteEnMainAdversaire = null;
+
+                    RafraichirGrilles();
+                    VerifierColonnes(GrilleAdversaire);
+                }
+                else if (typeAction == "RETOURNER")
+                {
+                    int index = int.Parse(parts[2]);
+                    var conteneurBouton = ItemsGrilleIA.ItemContainerGenerator.ContainerFromIndex(index) as FrameworkElement;
+                    var boutonCible = GetVisualChild<Button>(conteneurBouton);
+
+                    if (boutonCible != null) await DeplacerCurseurVers(boutonCible);
+                    await Task.Delay(300);
+
+                    GrilleAdversaire[index].EstVisible = true;
+                    RafraichirGrilles();
+                    VerifierColonnes(GrilleAdversaire);
+                }
+            }
+            else if (cmd == "FIN_TOUR")
+            {
+                await Task.Delay(500);
+                CurseurIA.Visibility = Visibility.Hidden;
+                if (!PartieEstFinie(GrilleAdversaire))
+                {
+                    tourDuJoueur = true;
+                }
+            }
+            else if (cmd == "FIN_PARTIE")
+            {
+                CurseurIA.Visibility = Visibility.Hidden;
+                TerminerPartie("L'adversaire a");
+            }
+        }
+
+        private void LancerPartieLocale(int seed = -1)
         {
             MenuPanel.Visibility = Visibility.Collapsed;
-            jeu = new MoteurJeu();
-            for (int i = 0; i < 12; i++) GrilleP2[i] = jeu.TirerCarte();
-            ItemsGrille.ItemsSource = jeu.GrilleJoueur;
-            ItemsGrilleIA.ItemsSource = GrilleP2;
-            MettreAJourDefausse();
+            jeu = new MoteurJeu(seed);
+
+            if (modeActuel == ModeJeu.Client)
+            {
+                MaGrille = jeu.GrilleP2;
+                GrilleAdversaire = jeu.GrilleP1;
+                tourDuJoueur = false;
+            }
+            else
+            {
+                MaGrille = jeu.GrilleP1;
+                GrilleAdversaire = jeu.GrilleP2;
+                tourDuJoueur = true;
+
+                if (modeActuel == ModeJeu.Hote)
+                    EnvoyerMessageReseau($"SYNC_INIT|{jeu.Seed}");
+            }
+
+            RafraichirGrilles();
         }
 
-        private void MettreAJourDefausse() { if (jeu.Defausse.Count > 0) BtnDefausse.Content = jeu.Defausse.Peek().Valeur.ToString(); }
-        private void RafraichirGrilles() { ItemsGrille.ItemsSource = null; ItemsGrille.ItemsSource = jeu.GrilleJoueur; ItemsGrilleIA.ItemsSource = null; ItemsGrilleIA.ItemsSource = GrilleP2; MettreAJourDefausse(); }
+        private void MettreAJourDefausse()
+        {
+            if (jeu.Defausse.Count > 0)
+            {
+                BtnDefausse.Content = jeu.Defausse.Peek().Valeur.ToString();
+
+                var converter = new BrushConverter();
+                BtnDefausse.Background = (Brush)converter.ConvertFromString(jeu.Defausse.Peek().CouleurFond);
+                BtnDefausse.Foreground = (Brush)converter.ConvertFromString(jeu.Defausse.Peek().CouleurTexte);
+            }
+            else
+            {
+                BtnDefausse.Content = "?";
+                var converter = new BrushConverter();
+                BtnDefausse.Background = (Brush)converter.ConvertFromString("#ecf0f1");
+                BtnDefausse.Foreground = (Brush)converter.ConvertFromString("#2c3e50");
+            }
+        }
+
+        private void RafraichirGrilles()
+        {
+            ItemsGrille.ItemsSource = null;
+            ItemsGrille.ItemsSource = MaGrille;
+            ItemsGrilleIA.ItemsSource = null;
+            ItemsGrilleIA.ItemsSource = GrilleAdversaire;
+            MettreAJourDefausse();
+        }
 
         private void VerifierColonnes(Carte[] grille)
         {
@@ -191,63 +335,86 @@ namespace SkyjoWPF
         private void TerminerPartie(string declencheur)
         {
             tourDuJoueur = false;
-            foreach (var c in jeu.GrilleJoueur) c.EstVisible = true;
-            foreach (var c in GrilleP2) c.EstVisible = true;
-            VerifierColonnes(jeu.GrilleJoueur); VerifierColonnes(GrilleP2); RafraichirGrilles();
+            foreach (var c in MaGrille) c.EstVisible = true;
+            foreach (var c in GrilleAdversaire) c.EstVisible = true;
+            VerifierColonnes(MaGrille); VerifierColonnes(GrilleAdversaire); RafraichirGrilles();
 
-            int scoreJoueur = jeu.GrilleJoueur.Where(c => !c.EstVide).Sum(c => c.Valeur);
-            int scoreIA = GrilleP2.Where(c => !c.EstVide).Sum(c => c.Valeur);
+            int scoreJoueur = MaGrille.Where(c => !c.EstVide).Sum(c => c.Valeur);
+            int scoreIA = GrilleAdversaire.Where(c => !c.EstVide).Sum(c => c.Valeur);
 
-            string message = $"{declencheur} retourné toutes ses cartes !\n\nVotre score : {scoreJoueur}\nScore IA : {scoreIA}\n\n";
-            if (scoreJoueur < scoreIA) message += "🏆 VOUS AVEZ GAGNÉ !"; else if (scoreJoueur > scoreIA) message += "💀 L'IA A GAGNÉ !"; else message += "🤝 ÉGALITÉ !";
+            string message = $"{declencheur} retourné toutes ses cartes !\n\nVotre score : {scoreJoueur}\nScore IA/Adv : {scoreIA}\n\n";
+            if (scoreJoueur < scoreIA) message += "🏆 VOUS AVEZ GAGNÉ !"; else if (scoreJoueur > scoreIA) message += "💀 VOUS AVEZ PERDU !"; else message += "🤝 ÉGALITÉ !";
             MessageBox.Show(message, "Fin de la partie");
 
-            // Retour au menu
             MenuPanel.Visibility = Visibility.Visible;
-            isHostingBroadcast = false; // On arrête le réseau si on était hôte
+            isHostingBroadcast = false;
         }
 
         private bool PartieEstFinie(Carte[] grille) { return grille.All(c => c.EstVide || c.EstVisible); }
 
         private void BtnPioche_Click(object sender, RoutedEventArgs e)
         {
-            if (!tourDuJoueur || modeActuel != ModeJeu.Solo) return;
+            if (!tourDuJoueur) return;
             if (carteEnMain == null)
             {
                 carteEnMain = jeu.TirerCarte(); carteEnMain.EstVisible = true;
+                if (modeActuel != ModeJeu.Solo) EnvoyerMessageReseau("ACTION|PIOCHE");
+                // Le message de la pioche restauré
                 MessageBox.Show($"Vous avez pioché : {carteEnMain.Valeur}\nCliquez sur une de vos cartes pour la remplacer.", "Pioche");
             }
         }
 
         private void BtnDefausse_Click(object sender, RoutedEventArgs e)
         {
-            if (!tourDuJoueur || modeActuel != ModeJeu.Solo) return;
+            if (!tourDuJoueur) return;
             if (carteEnMain == null && jeu.Defausse.Count > 0)
             {
                 carteEnMain = jeu.Defausse.Pop(); MettreAJourDefausse();
+                if (modeActuel != ModeJeu.Solo) EnvoyerMessageReseau("ACTION|PREND_DEFAUSSE");
+                // Le message de la défausse restauré
                 MessageBox.Show($"Vous avez pris le {carteEnMain.Valeur} de la défausse.\nCliquez sur une de vos cartes pour la remplacer.", "Défausse");
             }
         }
 
         private async void Carte_Click(object sender, RoutedEventArgs e)
         {
-            if (!tourDuJoueur || modeActuel != ModeJeu.Solo) return;
+            if (!tourDuJoueur) return;
             Button btn = sender as Button; Carte carteCliquee = btn?.DataContext as Carte;
 
             if (carteCliquee != null && !carteCliquee.EstVide)
             {
                 if (carteEnMain != null)
                 {
-                    int index = Array.IndexOf(jeu.GrilleJoueur, carteCliquee);
+                    int index = Array.IndexOf(MaGrille, carteCliquee);
                     carteCliquee.EstVisible = true; jeu.Defausse.Push(carteCliquee);
-                    jeu.GrilleJoueur[index] = carteEnMain; carteEnMain = null;
+                    MaGrille[index] = carteEnMain; carteEnMain = null;
+                    if (modeActuel != ModeJeu.Solo) EnvoyerMessageReseau($"ACTION|REMPLACER|{index}");
                 }
-                else if (!carteCliquee.EstVisible) { carteCliquee.EstVisible = true; }
+                else if (!carteCliquee.EstVisible)
+                {
+                    int index = Array.IndexOf(MaGrille, carteCliquee);
+                    carteCliquee.EstVisible = true;
+                    if (modeActuel != ModeJeu.Solo) EnvoyerMessageReseau($"ACTION|RETOURNER|{index}");
+                }
                 else return;
 
-                RafraichirGrilles(); VerifierColonnes(jeu.GrilleJoueur);
-                if (PartieEstFinie(jeu.GrilleJoueur)) { TerminerPartie("Vous avez"); return; }
-                await JouerTourIA();
+                RafraichirGrilles(); VerifierColonnes(MaGrille);
+                if (PartieEstFinie(MaGrille))
+                {
+                    if (modeActuel != ModeJeu.Solo) EnvoyerMessageReseau("FIN_PARTIE");
+                    TerminerPartie("Vous avez");
+                    return;
+                }
+
+                if (modeActuel == ModeJeu.Solo)
+                {
+                    await JouerTourIA();
+                }
+                else
+                {
+                    EnvoyerMessageReseau("FIN_TOUR");
+                    tourDuJoueur = false;
+                }
             }
         }
 
@@ -279,8 +446,8 @@ namespace SkyjoWPF
             }
 
             await Task.Delay(400);
-            int indexCible = Array.FindIndex(GrilleP2, c => !c.EstVisible && !c.EstVide);
-            if (indexCible == -1) indexCible = Array.FindIndex(GrilleP2, c => !c.EstVide);
+            int indexCible = Array.FindIndex(GrilleAdversaire, c => !c.EstVisible && !c.EstVide);
+            if (indexCible == -1) indexCible = Array.FindIndex(GrilleAdversaire, c => !c.EstVide);
 
             var conteneurBouton = ItemsGrilleIA.ItemContainerGenerator.ContainerFromIndex(indexCible) as FrameworkElement;
             var boutonCible = GetVisualChild<Button>(conteneurBouton);
@@ -288,12 +455,12 @@ namespace SkyjoWPF
             if (boutonCible != null)
             {
                 await DeplacerCurseurVers(boutonCible); await Task.Delay(300);
-                Carte ancienne = GrilleP2[indexCible]; ancienne.EstVisible = true; jeu.Defausse.Push(ancienne); GrilleP2[indexCible] = carteChoisie;
+                Carte ancienne = GrilleAdversaire[indexCible]; ancienne.EstVisible = true; jeu.Defausse.Push(ancienne); GrilleAdversaire[indexCible] = carteChoisie;
             }
             else if (!prendDefausse) { await DeplacerCurseurVers(BtnDefausse); jeu.Defausse.Push(carteChoisie); }
 
-            RafraichirGrilles(); VerifierColonnes(GrilleP2);
-            if (PartieEstFinie(GrilleP2)) { CurseurIA.Visibility = Visibility.Hidden; TerminerPartie("L'adversaire a"); return; }
+            RafraichirGrilles(); VerifierColonnes(GrilleAdversaire);
+            if (PartieEstFinie(GrilleAdversaire)) { CurseurIA.Visibility = Visibility.Hidden; TerminerPartie("L'adversaire a"); return; }
             await Task.Delay(500); CurseurIA.Visibility = Visibility.Hidden; tourDuJoueur = true;
         }
 
