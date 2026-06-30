@@ -14,6 +14,7 @@ using SkyjoWPF.Core;
 namespace SkyjoWPF
 {
     public enum ModeJeu { Solo, Hote, Client }
+    public enum DifficulteIA { Facile, Normal, Difficile }
 
     public class ServeurInfo
     {
@@ -29,13 +30,17 @@ namespace SkyjoWPF
         private Carte carteEnMainAdversaire;
         private bool tourDuJoueur = true;
 
+        // Nouvelles variables de règles
+        private bool vientDeLaPioche = false;
+        private bool doitRetournerCarte = false;
+
         private Carte[] MaGrille;
         private Carte[] GrilleAdversaire;
         private ModeJeu modeActuel = ModeJeu.Solo;
+        private DifficulteIA difficulteActuelle = DifficulteIA.Normal;
 
         private bool isHostingBroadcast = false;
         private const int PORT_UDP_SCAN = 5556;
-
         private TcpListener serveurTcp;
         private TcpClient clientTcp;
         private StreamReader reseauReader;
@@ -50,7 +55,8 @@ namespace SkyjoWPF
         private void BtnSolo_Click(object sender, RoutedEventArgs e)
         {
             modeActuel = ModeJeu.Solo;
-            TxtNomAdversaire.Text = "ADVERSAIRE (IA)";
+            difficulteActuelle = (DifficulteIA)ComboDifficulte.SelectedIndex;
+            TxtNomAdversaire.Text = $"ADVERSAIRE (IA {difficulteActuelle})";
             LancerPartieLocale();
         }
 
@@ -220,6 +226,13 @@ namespace SkyjoWPF
                     carteEnMainAdversaire = jeu.Defausse.Pop();
                     MettreAJourDefausse();
                 }
+                else if (typeAction == "JETER_CARTE_PIOCHE")
+                {
+                    await DeplacerCurseurVers(BtnDefausse);
+                    jeu.Defausse.Push(carteEnMainAdversaire);
+                    carteEnMainAdversaire = null;
+                    MettreAJourDefausse();
+                }
                 else if (typeAction == "REMPLACER")
                 {
                     int index = int.Parse(parts[2]);
@@ -272,6 +285,8 @@ namespace SkyjoWPF
         {
             MenuPanel.Visibility = Visibility.Collapsed;
             jeu = new MoteurJeu(seed);
+            vientDeLaPioche = false;
+            doitRetournerCarte = false;
 
             if (modeActuel == ModeJeu.Client)
             {
@@ -297,7 +312,6 @@ namespace SkyjoWPF
             if (jeu.Defausse.Count > 0)
             {
                 BtnDefausse.Content = jeu.Defausse.Peek().Valeur.ToString();
-
                 var converter = new BrushConverter();
                 BtnDefausse.Background = (Brush)converter.ConvertFromString(jeu.Defausse.Peek().CouleurFond);
                 BtnDefausse.Foreground = (Brush)converter.ConvertFromString(jeu.Defausse.Peek().CouleurTexte);
@@ -327,7 +341,15 @@ namespace SkyjoWPF
                 Carte c1 = grille[c]; Carte c2 = grille[c + 4]; Carte c3 = grille[c + 8];
                 if (!c1.EstVide && !c2.EstVide && !c3.EstVide && c1.EstVisible && c2.EstVisible && c3.EstVisible && c1.Valeur == c2.Valeur && c2.Valeur == c3.Valeur)
                 {
-                    jeu.Defausse.Push(c1); c1.EstVide = true; c2.EstVide = true; c3.EstVide = true;
+                    // CORRECTION ICI : On crée une nouvelle carte identique pour la défausse
+                    // au lieu d'envoyer la carte fantôme de la grille en mémoire.
+                    Carte defaussePropre = new Carte(c1.Valeur);
+                    defaussePropre.EstVisible = true;
+                    jeu.Defausse.Push(defaussePropre);
+
+                    c1.EstVide = true;
+                    c2.EstVide = true;
+                    c3.EstVide = true;
                 }
             }
         }
@@ -355,24 +377,42 @@ namespace SkyjoWPF
         private void BtnPioche_Click(object sender, RoutedEventArgs e)
         {
             if (!tourDuJoueur) return;
+            if (doitRetournerCarte)
+            {
+                MessageBox.Show("Vous devez d'abord retourner une de vos cartes face cachée !");
+                return;
+            }
+
             if (carteEnMain == null)
             {
                 carteEnMain = jeu.TirerCarte(); carteEnMain.EstVisible = true;
+                vientDeLaPioche = true;
                 if (modeActuel != ModeJeu.Solo) EnvoyerMessageReseau("ACTION|PIOCHE");
-                // Le message de la pioche restauré
-                MessageBox.Show($"Vous avez pioché : {carteEnMain.Valeur}\nCliquez sur une de vos cartes pour la remplacer.", "Pioche");
+                MessageBox.Show($"Vous avez pioché : {carteEnMain.Valeur}\nVous pouvez remplacer une de vos cartes, ou jeter cette carte dans la DÉFAUSSE.", "Pioche");
             }
         }
 
         private void BtnDefausse_Click(object sender, RoutedEventArgs e)
         {
             if (!tourDuJoueur) return;
+
             if (carteEnMain == null && jeu.Defausse.Count > 0)
             {
-                carteEnMain = jeu.Defausse.Pop(); MettreAJourDefausse();
+                if (doitRetournerCarte) return;
+                carteEnMain = jeu.Defausse.Pop();
+                vientDeLaPioche = false;
+                MettreAJourDefausse();
                 if (modeActuel != ModeJeu.Solo) EnvoyerMessageReseau("ACTION|PREND_DEFAUSSE");
-                // Le message de la défausse restauré
-                MessageBox.Show($"Vous avez pris le {carteEnMain.Valeur} de la défausse.\nCliquez sur une de vos cartes pour la remplacer.", "Défausse");
+            }
+            else if (carteEnMain != null && vientDeLaPioche)
+            {
+                jeu.Defausse.Push(carteEnMain);
+                carteEnMain = null;
+                vientDeLaPioche = false;
+                doitRetournerCarte = true;
+                MettreAJourDefausse();
+                if (modeActuel != ModeJeu.Solo) EnvoyerMessageReseau("ACTION|JETER_CARTE_PIOCHE");
+                MessageBox.Show("Carte jetée. Vous DEVEZ maintenant cliquer sur une de vos cartes FACE CACHÉE pour la révéler.", "Règle Skyjo");
             }
         }
 
@@ -383,16 +423,28 @@ namespace SkyjoWPF
 
             if (carteCliquee != null && !carteCliquee.EstVide)
             {
-                if (carteEnMain != null)
+                int index = Array.IndexOf(MaGrille, carteCliquee);
+
+                if (doitRetournerCarte)
                 {
-                    int index = Array.IndexOf(MaGrille, carteCliquee);
+                    if (carteCliquee.EstVisible)
+                    {
+                        MessageBox.Show("Vous devez impérativement retourner une carte FACE CACHÉE.");
+                        return;
+                    }
+                    carteCliquee.EstVisible = true;
+                    doitRetournerCarte = false;
+                    if (modeActuel != ModeJeu.Solo) EnvoyerMessageReseau($"ACTION|RETOURNER|{index}");
+                }
+                else if (carteEnMain != null)
+                {
                     carteCliquee.EstVisible = true; jeu.Defausse.Push(carteCliquee);
                     MaGrille[index] = carteEnMain; carteEnMain = null;
+                    vientDeLaPioche = false;
                     if (modeActuel != ModeJeu.Solo) EnvoyerMessageReseau($"ACTION|REMPLACER|{index}");
                 }
                 else if (!carteCliquee.EstVisible)
                 {
-                    int index = Array.IndexOf(MaGrille, carteCliquee);
                     carteCliquee.EstVisible = true;
                     if (modeActuel != ModeJeu.Solo) EnvoyerMessageReseau($"ACTION|RETOURNER|{index}");
                 }
@@ -406,15 +458,8 @@ namespace SkyjoWPF
                     return;
                 }
 
-                if (modeActuel == ModeJeu.Solo)
-                {
-                    await JouerTourIA();
-                }
-                else
-                {
-                    EnvoyerMessageReseau("FIN_TOUR");
-                    tourDuJoueur = false;
-                }
+                if (modeActuel == ModeJeu.Solo) await JouerTourIA();
+                else { EnvoyerMessageReseau("FIN_TOUR"); tourDuJoueur = false; }
             }
         }
 
@@ -435,29 +480,109 @@ namespace SkyjoWPF
         {
             tourDuJoueur = false; await Task.Delay(1000);
             Carte carteChoisie = null; bool prendDefausse = false;
+            bool jeterEtRetourner = false;
 
-            if (jeu.Defausse.Count > 0 && jeu.Defausse.Peek().Valeur <= 4)
+            int indexPireVisible = -1;
+            int pireValeur = -99;
+            for (int i = 0; i < 12; i++)
             {
-                await DeplacerCurseurVers(BtnDefausse); carteChoisie = jeu.Defausse.Pop(); prendDefausse = true;
+                if (!GrilleAdversaire[i].EstVide && GrilleAdversaire[i].EstVisible && GrilleAdversaire[i].Valeur > pireValeur)
+                {
+                    pireValeur = GrilleAdversaire[i].Valeur;
+                    indexPireVisible = i;
+                }
+            }
+
+            if (difficulteActuelle == DifficulteIA.Difficile)
+            {
+                if (jeu.Defausse.Count > 0 && (jeu.Defausse.Peek().Valeur <= 2 || (pireValeur > 4 && jeu.Defausse.Peek().Valeur < pireValeur - 2)))
+                {
+                    await DeplacerCurseurVers(BtnDefausse); carteChoisie = jeu.Defausse.Pop(); prendDefausse = true;
+                }
+                else
+                {
+                    await DeplacerCurseurVers(BtnPioche); carteChoisie = jeu.TirerCarte(); carteChoisie.EstVisible = true;
+                }
+            }
+            else if (difficulteActuelle == DifficulteIA.Normal)
+            {
+                if (jeu.Defausse.Count > 0 && jeu.Defausse.Peek().Valeur <= 4)
+                {
+                    await DeplacerCurseurVers(BtnDefausse); carteChoisie = jeu.Defausse.Pop(); prendDefausse = true;
+                }
+                else
+                {
+                    await DeplacerCurseurVers(BtnPioche); carteChoisie = jeu.TirerCarte(); carteChoisie.EstVisible = true;
+                }
             }
             else
             {
-                await DeplacerCurseurVers(BtnPioche); carteChoisie = jeu.TirerCarte(); carteChoisie.EstVisible = true;
+                if (jeu.Defausse.Count > 0 && new Random().Next(2) == 0)
+                {
+                    await DeplacerCurseurVers(BtnDefausse); carteChoisie = jeu.Defausse.Pop(); prendDefausse = true;
+                }
+                else
+                {
+                    await DeplacerCurseurVers(BtnPioche); carteChoisie = jeu.TirerCarte(); carteChoisie.EstVisible = true;
+                }
             }
 
             await Task.Delay(400);
-            int indexCible = Array.FindIndex(GrilleAdversaire, c => !c.EstVisible && !c.EstVide);
-            if (indexCible == -1) indexCible = Array.FindIndex(GrilleAdversaire, c => !c.EstVide);
 
-            var conteneurBouton = ItemsGrilleIA.ItemContainerGenerator.ContainerFromIndex(indexCible) as FrameworkElement;
-            var boutonCible = GetVisualChild<Button>(conteneurBouton);
+            int indexCible = -1;
 
-            if (boutonCible != null)
+            if (!prendDefausse && difficulteActuelle == DifficulteIA.Difficile && carteChoisie.Valeur > 6)
             {
-                await DeplacerCurseurVers(boutonCible); await Task.Delay(300);
-                Carte ancienne = GrilleAdversaire[indexCible]; ancienne.EstVisible = true; jeu.Defausse.Push(ancienne); GrilleAdversaire[indexCible] = carteChoisie;
+                jeterEtRetourner = true;
+                indexCible = Array.FindIndex(GrilleAdversaire, c => !c.EstVisible && !c.EstVide);
+                if (indexCible == -1) jeterEtRetourner = false;
             }
-            else if (!prendDefausse) { await DeplacerCurseurVers(BtnDefausse); jeu.Defausse.Push(carteChoisie); }
+            else if (!prendDefausse && difficulteActuelle == DifficulteIA.Facile && new Random().Next(2) == 0)
+            {
+                jeterEtRetourner = true;
+                indexCible = Array.FindIndex(GrilleAdversaire, c => !c.EstVisible && !c.EstVide);
+                if (indexCible == -1) jeterEtRetourner = false;
+            }
+
+            if (!jeterEtRetourner)
+            {
+                if (difficulteActuelle == DifficulteIA.Difficile && indexPireVisible != -1 && carteChoisie.Valeur <= pireValeur)
+                {
+                    indexCible = indexPireVisible;
+                }
+
+                if (indexCible == -1)
+                {
+                    indexCible = Array.FindIndex(GrilleAdversaire, c => !c.EstVisible && !c.EstVide);
+                    if (indexCible == -1) indexCible = Array.FindIndex(GrilleAdversaire, c => !c.EstVide);
+                }
+            }
+
+            if (jeterEtRetourner)
+            {
+                await DeplacerCurseurVers(BtnDefausse);
+                jeu.Defausse.Push(carteChoisie);
+                MettreAJourDefausse();
+                await Task.Delay(300);
+
+                var conteneurBouton = ItemsGrilleIA.ItemContainerGenerator.ContainerFromIndex(indexCible) as FrameworkElement;
+                var boutonCible = GetVisualChild<Button>(conteneurBouton);
+                if (boutonCible != null) await DeplacerCurseurVers(boutonCible);
+                await Task.Delay(300);
+
+                GrilleAdversaire[indexCible].EstVisible = true;
+            }
+            else
+            {
+                var conteneurBouton = ItemsGrilleIA.ItemContainerGenerator.ContainerFromIndex(indexCible) as FrameworkElement;
+                var boutonCible = GetVisualChild<Button>(conteneurBouton);
+                if (boutonCible != null)
+                {
+                    await DeplacerCurseurVers(boutonCible); await Task.Delay(300);
+                    Carte ancienne = GrilleAdversaire[indexCible]; ancienne.EstVisible = true; jeu.Defausse.Push(ancienne); GrilleAdversaire[indexCible] = carteChoisie;
+                }
+                else if (!prendDefausse) { await DeplacerCurseurVers(BtnDefausse); jeu.Defausse.Push(carteChoisie); }
+            }
 
             RafraichirGrilles(); VerifierColonnes(GrilleAdversaire);
             if (PartieEstFinie(GrilleAdversaire)) { CurseurIA.Visibility = Visibility.Hidden; TerminerPartie("L'adversaire a"); return; }
